@@ -123,12 +123,25 @@ python -m token_compressor.cli "我认为这个功能其实能够帮助用户非
 由于 A 所以 B -> 因 A 故 B
 因为 A 所以 B -> 因 A 故 B
 用户想要 A 可以使用 B -> 用户可用 B 做 A
+为满足 A，优化 B，减少 C，提升 D，现启动 E，依托 F 搭建 G -> 为满足 A，基于 F 开发 G，优化 B，减少 C，提升 D
 ```
 
 示例：
 
 ```powershell
 python -m token_compressor.cli "由于现在输入内容比较长所以我们需要进行压缩处理" --details --token-counter coarse
+```
+
+业务文案示例：
+
+```powershell
+python -m token_compressor.cli "为满足日常业务线上化落地需求，优化现有流程效率，减少人工重复操作，提升数据统一管理与可视化展示能力，现启动本功能开发项目，依托现有基础框架搭建完整可用的业务模块。" --details --token-counter coarse
+```
+
+输出：
+
+```text
+为满足业务线上化落地需求，基于既有框架开发业务模块，优化流程效率，减少人工重复，提升数据统管与可视化能力。
 ```
 
 ## 自定义配置

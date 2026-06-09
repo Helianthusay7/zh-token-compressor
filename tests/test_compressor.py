@@ -110,6 +110,19 @@ class TokenCompressorTest(unittest.TestCase):
         self.assertIn("延迟", result.compressed)
         self.assertTrue(any("为了A需要B" in item for item in result.removed))
 
+    def test_business_project_template(self) -> None:
+        compressor = TokenCompressor(token_counter="coarse")
+        result = compressor.compress(
+            "为满足日常业务线上化落地需求，优化现有流程效率，减少人工重复操作，"
+            "提升数据统一管理与可视化展示能力，现启动本功能开发项目，"
+            "依托现有基础框架搭建完整可用的业务模块。"
+        )
+
+        self.assertIn("业务线上化落地需求", result.compressed)
+        self.assertIn("基于既有框架开发业务模块", result.compressed)
+        self.assertIn("减少人工重复", result.compressed)
+        self.assertLess(result.compression_ratio, 0.7)
+
     def test_diff_reports_changes(self) -> None:
         compressor = TokenCompressor(token_counter="coarse")
         result = compressor.compress("我认为这个功能其实能够帮助用户非常快速地完成文本压缩")

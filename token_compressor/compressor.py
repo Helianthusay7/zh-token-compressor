@@ -115,6 +115,11 @@ class TokenCompressor:
         TemplateRule(r"如果(.{1,40}?)那么(.{1,60})", r"若\1则\2", "如果A那么B->若A则B"),
         TemplateRule(r"由于(.{1,40}?)所以(.{1,60})", r"因\1故\2", "由于A所以B->因A故B"),
         TemplateRule(r"因为(.{1,40}?)所以(.{1,60})", r"因\1故\2", "因为A所以B->因A故B"),
+        TemplateRule(
+            r"为满足(.{1,40}?)，优化(.{1,40}?)，减少(.{1,40}?)，提升(.{1,50}?)，现启动(.{1,30}?)，依托(.{1,40}?)搭建(.{1,40}?)。",
+            r"为满足\1，基于\6开发\7，优化\2，减少\3，提升\4。",
+            "业务项目说明模板",
+        ),
     )
 
     DEFAULT_DROP_PHRASES = (
@@ -192,6 +197,15 @@ class TokenCompressor:
         "使用量": "用量",
         "表达效率": "表达效率",
         "文本压缩": "压缩文本",
+        "日常业务": "业务",
+        "现有基础框架": "既有框架",
+        "现有流程效率": "流程效率",
+        "人工重复操作": "人工重复",
+        "减少人工重复": "减少人工重复",
+        "数据统一管理": "数据统管",
+        "可视化展示能力": "可视化能力",
+        "完整可用的业务模块": "业务模块",
+        "本功能开发项目": "本项目",
     }
 
     DEFAULT_KEEP_WORDS = (
@@ -201,6 +215,7 @@ class TokenCompressor:
         "必须",
         "应该",
         "需要",
+        "减少",
         "禁止",
         "不能",
         "只",
@@ -241,6 +256,15 @@ class TokenCompressor:
         "用量",
         "保留",
         "关键词",
+        "业务",
+        "线上化",
+        "落地",
+        "流程",
+        "人工",
+        "重复",
+        "可视化",
+        "框架",
+        "模块",
     )
 
     WEAK_TOKENS = frozenset(("的", "地", "得", "了", "着", "过", "就", "都", "还", "也", "又", "再", "很", "更"))
@@ -603,6 +627,8 @@ class TokenCompressor:
         removed: list[str] = []
         candidate = text
         for source, target in sorted(self.replacements.items(), key=lambda item: len(item[0]), reverse=True):
+            if source in self.keep_words:
+                continue
             if source in candidate:
                 candidate = candidate.replace(source, target)
                 if source != target:
