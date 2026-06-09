@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--tiktoken-encoding", default="cl100k_base", help="tiktoken encoding name")
     parser.add_argument("--input-file", help="UTF-8 text file, one sentence per line")
+    parser.add_argument("--paragraph", action="store_true", help="treat input text or input file as one paragraph")
     parser.add_argument("--json", action="store_true", help="print JSON lines")
     parser.add_argument("--details", action="store_true", help="print compression diagnostics")
     parser.add_argument("--learn", help="CSV file with columns: original, compressed")
@@ -75,6 +76,11 @@ def main() -> None:
         return
 
     if args.input_file:
+        if args.paragraph:
+            text = Path(args.input_file).read_text(encoding="utf-8-sig")
+            result = compressor.compress_paragraph(text, target_ratio=args.ratio, mode=args.mode, keywords=args.keyword)
+            _print_paragraph_result(result, as_json=args.json, details=args.details)
+            return
         for text in _read_lines(args.input_file):
             result = compressor.compress(text, target_ratio=args.ratio, mode=args.mode, keywords=args.keyword)
             _print_result(result, as_json=args.json, details=args.details)
@@ -83,8 +89,12 @@ def main() -> None:
     if not args.text:
         raise SystemExit("missing text")
 
-    result = compressor.compress(args.text, target_ratio=args.ratio, mode=args.mode, keywords=args.keyword)
-    _print_result(result, as_json=args.json, details=True if args.details else False)
+    if args.paragraph:
+        result = compressor.compress_paragraph(args.text, target_ratio=args.ratio, mode=args.mode, keywords=args.keyword)
+        _print_paragraph_result(result, as_json=args.json, details=args.details)
+    else:
+        result = compressor.compress(args.text, target_ratio=args.ratio, mode=args.mode, keywords=args.keyword)
+        _print_result(result, as_json=args.json, details=True if args.details else False)
 
 
 def _read_pairs(path: str) -> list[tuple[str, str]]:
@@ -141,6 +151,51 @@ def _print_result(result, as_json: bool, details: bool) -> None:
         )
         if result.removed:
             print("removed:", " / ".join(result.removed))
+        if result.warnings:
+            print("warnings:", " / ".join(result.warnings))
+
+
+def _print_paragraph_result(result, as_json: bool, details: bool) -> None:
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "original": result.original,
+                    "compressed": result.compressed,
+                    "original_tokens": result.original_tokens,
+                    "compressed_tokens": result.compressed_tokens,
+                    "compression_ratio": result.compression_ratio,
+                    "removed_sentences": result.removed_sentences,
+                    "warnings": result.warnings,
+                    "token_counter": result.token_counter,
+                    "sentences": [
+                        {
+                            "original": item.original,
+                            "compressed": item.compressed,
+                            "ratio": item.compression_ratio,
+                            "anchor_recall": item.anchor_recall,
+                            "warnings": item.warnings,
+                        }
+                        for item in result.sentence_results
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    print(result.compressed)
+    if details:
+        print(
+            "tokens: "
+            f"{result.original_tokens} -> {result.compressed_tokens}, "
+            f"ratio={result.compression_ratio}, "
+            f"sentences={len(result.sentence_results)}, "
+            f"removed_sentences={len(result.removed_sentences)}, "
+            f"counter={result.token_counter}"
+        )
+        if result.removed_sentences:
+            print("removed sentences:", " / ".join(result.removed_sentences))
         if result.warnings:
             print("warnings:", " / ".join(result.warnings))
 

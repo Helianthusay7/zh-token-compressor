@@ -34,6 +34,39 @@ class TokenCompressorTest(unittest.TestCase):
         self.assertEqual(safe.mode, "safe")
         self.assertEqual(aggressive.mode, "aggressive")
 
+    def test_template_rules_compress_causal_sentence(self) -> None:
+        compressor = TokenCompressor(token_counter="coarse")
+        result = compressor.compress("由于现在输入内容比较长所以我们需要进行压缩处理")
+
+        self.assertIn("因", result.compressed)
+        self.assertIn("故", result.compressed)
+        self.assertLess(result.compression_ratio, 0.75)
+
+    def test_user_goal_template_keeps_conditional_sentence_readable(self) -> None:
+        compressor = TokenCompressor(token_counter="coarse")
+        direct = compressor.compress("用户想要减少 token 使用量可以使用这个压缩模型")
+        conditional = compressor.compress("如果用户想要减少 token 使用量那么可以使用这个压缩模型")
+
+        self.assertIn("用户可用", direct.compressed)
+        self.assertIn("若用户", conditional.compressed)
+        self.assertIn("则", conditional.compressed)
+        self.assertNotIn("做降token用量则", conditional.compressed)
+
+    def test_compress_paragraph_removes_duplicate_sentence(self) -> None:
+        compressor = TokenCompressor(token_counter="coarse")
+        paragraph = (
+            "我认为这个功能其实能够帮助用户非常快速地完成文本压缩。"
+            "我认为这个功能其实能够帮助用户非常快速地完成文本压缩。"
+            "如果用户想要减少 token 使用量那么可以使用这个压缩模型。"
+        )
+
+        result = compressor.compress_paragraph(paragraph, mode="balanced")
+
+        self.assertLess(result.compressed_tokens, result.original_tokens)
+        self.assertEqual(len(result.removed_sentences), 1)
+        self.assertEqual(len(result.sentence_results), 2)
+        self.assertIn("token", result.compressed)
+
     def test_preserves_negation_numbers_and_keywords(self) -> None:
         compressor = TokenCompressor()
         result = compressor.compress(

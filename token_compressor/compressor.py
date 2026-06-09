@@ -61,6 +61,19 @@ class CompressionResult:
 
 
 @dataclass(frozen=True)
+class ParagraphCompressionResult:
+    original: str
+    compressed: str
+    original_tokens: int
+    compressed_tokens: int
+    compression_ratio: float
+    sentence_results: tuple[CompressionResult, ...]
+    removed_sentences: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    token_counter: str = "coarse"
+
+
+@dataclass(frozen=True)
 class _Candidate:
     text: str
     removed: tuple[str, ...]
@@ -291,6 +304,50 @@ class TokenCompressor:
     ) -> list[CompressionResult]:
         return [self.compress(text, target_ratio=target_ratio, mode=mode) for text in texts]
 
+    def compress_paragraph(
+        self,
+        text: str,
+        target_ratio: float | None = None,
+        mode: str = "balanced",
+        keywords: Iterable[str] | None = None,
+    ) -> ParagraphCompressionResult:
+        original = text.strip()
+        if not original:
+            return ParagraphCompressionResult("", "", 0, 0, 1.0, (), token_counter=self.token_counter.name)
+
+        sentence_results: list[CompressionResult] = []
+        removed_sentences: list[str] = []
+        seen_signatures: set[str] = set()
+
+        for sentence in self._split_sentences(original):
+            signature = self._sentence_signature(sentence)
+            if signature and signature in seen_signatures:
+                removed_sentences.append(sentence)
+                continue
+            if signature:
+                seen_signatures.add(signature)
+            sentence_results.append(
+                self.compress(sentence, target_ratio=target_ratio, mode=mode, keywords=keywords)
+            )
+
+        compressed = self._cleanup_paragraph("".join(result.compressed for result in sentence_results))
+        original_tokens = self.count_tokens(original)
+        compressed_tokens = self.count_tokens(compressed)
+        ratio = compressed_tokens / original_tokens if original_tokens else 1.0
+        warnings = tuple(dict.fromkeys(warning for result in sentence_results for warning in result.warnings))
+
+        return ParagraphCompressionResult(
+            original=original,
+            compressed=compressed,
+            original_tokens=original_tokens,
+            compressed_tokens=compressed_tokens,
+            compression_ratio=round(ratio, 3),
+            sentence_results=tuple(sentence_results),
+            removed_sentences=tuple(removed_sentences),
+            warnings=warnings,
+            token_counter=self.token_counter.name,
+        )
+
     def evaluate(
         self,
         texts: Iterable[str],
@@ -387,19 +444,33 @@ class TokenCompressor:
     ) -> list[_Candidate]:
         candidates = [_Candidate(original, (), "original")]
 
+        templated, template_removed = self._apply_templates(original)
+        candidates.append(_Candidate(templated, tuple(template_removed), "template"))
+
         replaced, replaced_removed = self._replace_phrases(original)
         candidates.append(_Candidate(replaced, tuple(replaced_removed), "replace"))
 
-        dropped, drop_removed = self._drop_phrases(original)
+        template_replaced, template_replaced_removed = self._replace_phrases(templated)
+        candidates.append(
+            _Candidate(template_replaced, tuple(template_removed + template_replaced_removed), "template+replace")
+        )
+
+        dropped, drop_removed = self._drop_phrases(templated)
         dropped_replaced, dropped_replaced_removed = self._replace_phrases(dropped)
-        candidates.append(_Candidate(dropped_replaced, tuple(drop_removed + dropped_replaced_removed), "drop+replace"))
+        candidates.append(
+            _Candidate(dropped_replaced, tuple(template_removed + drop_removed + dropped_replaced_removed), "drop+replace")
+        )
 
         trimmed = self._trim_particles(dropped_replaced)
-        candidates.append(_Candidate(trimmed, tuple(drop_removed + dropped_replaced_removed), "trim"))
+        candidates.append(_Candidate(trimmed, tuple(template_removed + drop_removed + dropped_replaced_removed), "trim"))
 
         compact, compact_removed = self._drop_weak_tokens(trimmed, anchors, target_ratio=config.target_ratio)
         candidates.append(
-            _Candidate(compact, tuple(drop_removed + dropped_replaced_removed + compact_removed), "weak-token")
+            _Candidate(
+                compact,
+                tuple(template_removed + drop_removed + dropped_replaced_removed + compact_removed),
+                "weak-token",
+            )
         )
 
         if config.drop_optional_clauses:
@@ -408,12 +479,33 @@ class TokenCompressor:
             candidates.append(
                 _Candidate(
                     clause_compact,
-                    tuple(drop_removed + dropped_replaced_removed + clause_removed + weak_removed),
+                    tuple(template_removed + drop_removed + dropped_replaced_removed + clause_removed + weak_removed),
                     "clause+weak-token",
                 )
             )
 
         return self._unique_candidates(candidates)
+
+    def _apply_templates(self, text: str) -> tuple[str, list[str]]:
+        candidate = text
+        removed: list[str] = []
+        rules = (
+            (r"如果(.{1,40}?)那么(.{1,60})", r"若\1则\2", "如果A那么B->若A则B"),
+            (r"由于(.{1,40}?)所以(.{1,60})", r"因\1故\2", "由于A所以B->因A故B"),
+            (r"因为(.{1,40}?)所以(.{1,60})", r"因\1故\2", "因为A所以B->因A故B"),
+        )
+
+        for pattern, replacement, label in rules:
+            updated = re.sub(pattern, replacement, candidate)
+            if updated != candidate:
+                candidate = updated
+                removed.append(label)
+
+        updated = re.sub(r"用户想要([^则那么。！？；;]{1,32}?)可以使用([^。！？；;]{1,32})", r"用户可用\2做\1", candidate)
+        if updated != candidate:
+            candidate = updated
+            removed.append("用户想要A可以使用B->用户可用B做A")
+        return candidate, removed
 
     def _select_candidate(
         self,
@@ -599,6 +691,23 @@ class TokenCompressor:
         text = re.sub(rf"[，；、,;]+$", "", text)
         text = re.sub(rf"([{re.escape(self.PUNCTUATION)}])+", lambda match: match.group(0)[0], text)
         return text.strip()
+
+    def _split_sentences(self, text: str) -> list[str]:
+        parts = re.findall(r"[^。！？!?；;]+[。！？!?；;]?", text)
+        return [part.strip() for part in parts if part.strip()]
+
+    def _sentence_signature(self, sentence: str) -> str:
+        normalized = self._normalize(sentence)
+        normalized = re.sub(rf"[{re.escape(self.PUNCTUATION)}]", "", normalized)
+        for phrase in self.drop_phrases:
+            normalized = normalized.replace(phrase, "")
+        normalized, _ = self._replace_phrases(normalized)
+        return normalized
+
+    def _cleanup_paragraph(self, text: str) -> str:
+        text = re.sub(r"\s+", "", text.strip())
+        text = re.sub(r"([。！？!?；;])+", lambda match: match.group(0)[0], text)
+        return text
 
     def _normalize(self, text: str) -> str:
         return re.sub(r"\s+", "", text.strip())
