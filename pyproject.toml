@@ -1,0 +1,9 @@
+[project]
+name = "token-compressor"
+version = "0.1.0"
+description = "A lightweight Chinese token compression prototype."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+token-compress = "token_compressor.cli:main"
