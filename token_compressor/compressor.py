@@ -117,7 +117,7 @@ class TokenCompressor:
         TemplateRule(r"因为(.{1,40}?)所以(.{1,60})", r"因\1故\2", "因为A所以B->因A故B"),
         TemplateRule(
             r"为满足(.{1,40}?)，优化(.{1,40}?)，减少(.{1,40}?)，提升(.{1,50}?)，现启动(.{1,30}?)，依托(.{1,40}?)搭建(.{1,40}?)。",
-            r"为满足\1，基于\6开发\7，优化\2，减少\3，提升\4。",
+            r"为满足\1，现启动\5，基于\6开发\7，优化\2，减少\3，提升\4。",
             "业务项目说明模板",
         ),
     )
@@ -318,6 +318,15 @@ class TokenCompressor:
         tiktoken_encoding: str = "cl100k_base",
     ) -> "TokenCompressor":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls.from_config_data(data, token_counter=token_counter, tiktoken_encoding=tiktoken_encoding)
+
+    @classmethod
+    def from_config_data(
+        cls,
+        data: dict[str, object],
+        token_counter: str | TokenCounter = "auto",
+        tiktoken_encoding: str = "cl100k_base",
+    ) -> "TokenCompressor":
         return cls(
             drop_phrases=cls.DEFAULT_DROP_PHRASES + tuple(data.get("drop_phrases", ())),
             replacements=data.get("replacements"),
@@ -604,7 +613,15 @@ class TokenCompressor:
             target_distance = abs(ratio - config.target_ratio)
             too_short_penalty = 0.20 if ratio < config.target_ratio * 0.72 else 0.0
             recall_penalty = max(0.0, config.min_anchor_recall - recall) * 2.4
-            score = (1.0 - ratio) + recall * 0.85 - target_distance * 0.25 - too_short_penalty - recall_penalty
+            template_bonus = 0.08 if "template" in candidate.stage else 0.0
+            score = (
+                (1.0 - ratio)
+                + recall * 0.85
+                + template_bonus
+                - target_distance * 0.25
+                - too_short_penalty
+                - recall_penalty
+            )
             if recall >= config.min_anchor_recall or ratio >= 0.85:
                 scored.append((score, _Candidate(text, candidate.removed, candidate.stage)))
 
@@ -720,7 +737,9 @@ class TokenCompressor:
         if anchor in text:
             return True
         replacement = self.replacements.get(anchor)
-        return bool(replacement and replacement in text)
+        if replacement and replacement in text:
+            return True
+        return any(anchor in source and target and target in text for source, target in self.replacements.items())
 
     def _build_diff(self, original: str, compressed: str) -> tuple[DiffOperation, ...]:
         source_tokens = self._segment(original)

@@ -1,6 +1,6 @@
 [project]
 name = "token-compressor"
-version = "0.6.0"
+version = "0.7.0"
 description = "A lightweight Chinese token compression prototype."
 requires-python = ">=3.10"
 dependencies = []
@@ -10,3 +10,7 @@ tiktoken = ["tiktoken>=0.7.0"]
 
 [project.scripts]
 token-compress = "token_compressor.cli:main"
+ztc = "token_compressor.cli:main"
+
+[tool.setuptools.package-data]
+token_compressor = ["domain_configs/*.json"]

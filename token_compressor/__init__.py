@@ -6,6 +6,7 @@ from .compressor import (
     TemplateRule,
     TokenCompressor,
 )
+from .domains import build_domain_compressor, detect_domain, load_domain_config
 
 __all__ = [
     "CompressionMode",
@@ -14,4 +15,7 @@ __all__ = [
     "ParagraphCompressionResult",
     "TemplateRule",
     "TokenCompressor",
+    "build_domain_compressor",
+    "detect_domain",
+    "load_domain_config",
 ]

@@ -36,6 +36,63 @@ tokens: 22 -> 9, ratio=0.409, mode=balanced, anchor_recall=1.0
 python -m token_compressor.cli "我认为这个功能其实能够帮助用户非常快速地完成文本压缩"
 ```
 
+安装为命令行工具后，可以直接使用短命令：
+
+```powershell
+pip install -e .
+ztc "我认为这个功能其实能够帮助用户非常快速地完成文本压缩"
+```
+
+默认行为等同于：
+
+```text
+--domain auto --mode balanced --token-counter auto
+```
+
+## 领域自动识别
+
+压缩器内置多个领域配置包：
+
+```text
+general / business / tech / product / report / legal / finance / education / medical
+```
+
+默认 `--domain auto` 会根据关键词自动选择领域：
+
+```powershell
+ztc "由于数据库连接异常导致接口响应时间变长，因此需要进行部署优化" --details --token-counter coarse
+```
+
+也可以手动指定：
+
+```powershell
+ztc "甲方应在合同约定期限内完成付款，否则承担违约责任" --domain legal --details
+```
+
+## 交互模式
+
+连续压缩多段文本：
+
+```powershell
+ztc --interactive
+```
+
+输入一行，立即返回压缩结果。Windows 下按 `Ctrl+Z` 后回车退出。
+
+## 剪贴板模式
+
+Windows 下可以直接压缩剪贴板内容，并把结果写回剪贴板：
+
+```powershell
+ztc --clipboard
+```
+
+常用流程：
+
+```text
+复制原文 -> ztc --clipboard -> 直接粘贴压缩结果
+```
+
 ## 压缩模式
 
 ```powershell
@@ -141,7 +198,7 @@ python -m token_compressor.cli "为满足日常业务线上化落地需求，优
 输出：
 
 ```text
-为满足业务线上化落地需求，基于既有框架开发业务模块，优化流程效率，减少人工重复，提升数据统管与可视化能力。
+为满足业务线上化落地需求，现启动本项目，基于既有框架开发业务模块，优化流程效率，减少人工重复，提升数据统管与可视化能力。
 ```
 
 ## 自定义配置

@@ -1,5 +1,6 @@
 import unittest
 
+from token_compressor.domains import build_domain_compressor, detect_domain, load_domain_config
 from token_compressor.benchmark import load_benchmark, run_benchmark
 from token_compressor import TokenCompressor
 
@@ -119,9 +120,34 @@ class TokenCompressorTest(unittest.TestCase):
         )
 
         self.assertIn("业务线上化落地需求", result.compressed)
+        self.assertIn("现启动本项目", result.compressed)
         self.assertIn("基于既有框架开发业务模块", result.compressed)
         self.assertIn("减少人工重复", result.compressed)
         self.assertLess(result.compression_ratio, 0.7)
+
+    def test_detects_business_domain(self) -> None:
+        text = "为满足业务线上化落地需求，优化流程效率并提升可视化能力"
+
+        self.assertEqual(detect_domain(text), "business")
+
+    def test_domain_compressor_applies_tech_rules(self) -> None:
+        selected, compressor = build_domain_compressor(
+            "auto",
+            sample_text="由于数据库连接异常导致接口响应时间变长，因此需要进行部署优化",
+            token_counter="coarse",
+        )
+        result = compressor.compress("由于数据库连接异常导致接口响应时间变长，因此需要进行部署优化")
+
+        self.assertEqual(selected, "tech")
+        self.assertIn("DB连接", result.compressed)
+        self.assertIn("延迟", result.compressed)
+        self.assertIn("部署", result.compressed)
+
+    def test_load_domain_config(self) -> None:
+        config = load_domain_config("business")
+
+        self.assertIn("domain_terms", config)
+        self.assertIn("template_rules", config)
 
     def test_diff_reports_changes(self) -> None:
         compressor = TokenCompressor(token_counter="coarse")
