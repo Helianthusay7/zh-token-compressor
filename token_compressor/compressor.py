@@ -5,7 +5,35 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
+
+
+class TokenCounter(Protocol):
+    name: str
+
+    def count(self, text: str) -> int:
+        ...
+
+
+class CoarseTokenCounter:
+    name = "coarse"
+
+    def __init__(self, segmenter) -> None:
+        self._segmenter = segmenter
+
+    def count(self, text: str) -> int:
+        return len(self._segmenter(text))
+
+
+class TiktokenCounter:
+    def __init__(self, encoding_name: str = "cl100k_base") -> None:
+        import tiktoken
+
+        self.name = f"tiktoken:{encoding_name}"
+        self._encoding = tiktoken.get_encoding(encoding_name)
+
+    def count(self, text: str) -> int:
+        return len(self._encoding.encode(text))
 
 
 @dataclass(frozen=True)
@@ -29,6 +57,7 @@ class CompressionResult:
     preserved_terms: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     candidates_considered: int = 0
+    token_counter: str = "coarse"
 
 
 @dataclass(frozen=True)
@@ -187,6 +216,8 @@ class TokenCompressor:
         replacements: dict[str, str] | None = None,
         keep_words: Iterable[str] | None = None,
         domain_terms: Iterable[str] | None = None,
+        token_counter: str | TokenCounter = "auto",
+        tiktoken_encoding: str = "cl100k_base",
     ) -> None:
         self.drop_phrases = tuple(drop_phrases or self.DEFAULT_DROP_PHRASES)
         self.replacements = dict(self.DEFAULT_REPLACEMENTS)
@@ -195,15 +226,23 @@ class TokenCompressor:
         self.keep_words = tuple(keep_words or self.DEFAULT_KEEP_WORDS)
         self.domain_terms = tuple(domain_terms or self.DEFAULT_DOMAIN_TERMS)
         self.lexicon = tuple(sorted(set(self.domain_terms + self.keep_words), key=len, reverse=True))
+        self.token_counter = self._build_token_counter(token_counter, tiktoken_encoding)
 
     @classmethod
-    def from_profile(cls, path: str | Path) -> "TokenCompressor":
+    def from_profile(
+        cls,
+        path: str | Path,
+        token_counter: str | TokenCounter = "auto",
+        tiktoken_encoding: str = "cl100k_base",
+    ) -> "TokenCompressor":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls(
             drop_phrases=data.get("drop_phrases"),
             replacements=data.get("replacements"),
             keep_words=data.get("keep_words"),
             domain_terms=data.get("domain_terms"),
+            token_counter=token_counter,
+            tiktoken_encoding=tiktoken_encoding,
         )
 
     def compress(
@@ -216,7 +255,7 @@ class TokenCompressor:
         config = self._mode_config(mode, target_ratio)
         original = self._normalize(text)
         if not original:
-            return CompressionResult("", "", 0, 0, 1.0, (), mode=config.name)
+            return CompressionResult("", "", 0, 0, 1.0, (), mode=config.name, token_counter=self.token_counter.name)
 
         anchors = self._extract_anchors(original, keywords)
         candidates = self._generate_candidates(original, config, anchors)
@@ -238,9 +277,10 @@ class TokenCompressor:
             removed=best.removed,
             mode=config.name,
             anchor_recall=round(recall, 3),
-            preserved_terms=tuple(term for term in anchors if term in compressed),
+            preserved_terms=tuple(term for term in anchors if self._anchor_preserved(term, compressed)),
             warnings=warnings,
             candidates_considered=len(candidates),
+            token_counter=self.token_counter.name,
         )
 
     def batch_compress(
@@ -309,7 +349,25 @@ class TokenCompressor:
         )
 
     def count_tokens(self, text: str) -> int:
-        return len(self._segment(text))
+        return self.token_counter.count(text)
+
+    def _build_token_counter(
+        self,
+        token_counter: str | TokenCounter,
+        tiktoken_encoding: str,
+    ) -> TokenCounter:
+        if not isinstance(token_counter, str):
+            return token_counter
+        if token_counter == "coarse":
+            return CoarseTokenCounter(self._segment)
+        if token_counter in ("auto", "tiktoken"):
+            try:
+                return TiktokenCounter(tiktoken_encoding)
+            except ImportError:
+                if token_counter == "tiktoken":
+                    raise
+                return CoarseTokenCounter(self._segment)
+        raise ValueError("token_counter must be auto, coarse, tiktoken, or a TokenCounter object")
 
     def _mode_config(self, mode: str, target_ratio: float | None) -> CompressionMode:
         if mode not in self.MODES:
@@ -483,8 +541,14 @@ class TokenCompressor:
     def _anchor_recall(self, text: str, anchors: tuple[str, ...]) -> float:
         if not anchors:
             return 1.0
-        kept = sum(1 for anchor in anchors if anchor in text)
+        kept = sum(1 for anchor in anchors if self._anchor_preserved(anchor, text))
         return kept / len(anchors)
+
+    def _anchor_preserved(self, anchor: str, text: str) -> bool:
+        if anchor in text:
+            return True
+        replacement = self.replacements.get(anchor)
+        return bool(replacement and replacement in text)
 
     def _warnings(
         self,
@@ -504,7 +568,7 @@ class TokenCompressor:
             if number not in compressed:
                 warnings.append(f"lost_number:{number}")
         for anchor in anchors:
-            if anchor in self.keep_words and anchor not in compressed:
+            if anchor in self.keep_words and not self._anchor_preserved(anchor, compressed):
                 warnings.append(f"lost_keep_word:{anchor}")
         return tuple(dict.fromkeys(warnings))
 

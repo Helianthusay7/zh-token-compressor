@@ -1,6 +1,14 @@
 import unittest
 
+from token_compressor.benchmark import load_benchmark, run_benchmark
 from token_compressor import TokenCompressor
+
+
+class FixedTokenCounter:
+    name = "fixed"
+
+    def count(self, text: str) -> int:
+        return max(1, len(text) // 2)
 
 
 class TokenCompressorTest(unittest.TestCase):
@@ -51,6 +59,29 @@ class TokenCompressorTest(unittest.TestCase):
         self.assertEqual(metrics["count"], 2.0)
         self.assertLess(metrics["avg_ratio"], 1.0)
         self.assertGreater(metrics["avg_anchor_recall"], 0.0)
+
+    def test_can_force_coarse_token_counter(self) -> None:
+        compressor = TokenCompressor(token_counter="coarse")
+        result = compressor.compress("如果用户想要减少 token 使用量那么可以使用这个压缩模型")
+
+        self.assertEqual(result.token_counter, "coarse")
+        self.assertLess(result.compression_ratio, 1.0)
+
+    def test_accepts_custom_token_counter(self) -> None:
+        compressor = TokenCompressor(token_counter=FixedTokenCounter())
+        result = compressor.compress("我认为这个功能其实能够帮助用户非常快速地完成文本压缩")
+
+        self.assertEqual(result.token_counter, "fixed")
+        self.assertGreater(result.original_tokens, 0)
+
+    def test_benchmark_reports_failures(self) -> None:
+        compressor = TokenCompressor(token_counter="coarse")
+        cases = load_benchmark("examples/benchmark.csv")
+        report = run_benchmark(compressor, cases)
+
+        self.assertGreater(report.count, 0)
+        self.assertEqual(report.token_counter, "coarse")
+        self.assertGreaterEqual(report.passed, 1)
 
     def test_learn_profile_from_pairs(self) -> None:
         compressor = TokenCompressor()

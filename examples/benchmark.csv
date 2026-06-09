@@ -1,0 +1,5 @@
+text,mode,keywords,max_ratio,min_anchor_recall
+我认为这个功能其实能够帮助用户非常快速地完成文本压缩,balanced,用户|压缩,0.55,0.9
+如果用户想要减少 token 使用量那么可以使用这个压缩模型,aggressive,token|模型,0.7,0.9
+这个模型不能删除 30% 这个数字，也必须保留 API 关键词,aggressive,API|30%,0.8,0.9
+由于现在输入内容比较长所以我们需要进行压缩处理,balanced,输入|压缩,0.75,0.85
