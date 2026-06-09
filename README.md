@@ -1,42 +1,96 @@
-# token-compressor
+# zh-token-compressor
 
-一个轻量中文 token 压缩模型原型：输入一句话，输出更短且尽量保留等效语义的句子。
+一个轻量中文 token 压缩器：输入一句话，输出更短且尽量保留等效语义的句子。
 
-它不是大语言模型，而是可解释的规则压缩器，适合做：
+当前版本不是大语言模型，而是一个可解释的混合压缩器：
 
-- prompt 预压缩
-- 数据集清洗
-- “原句 -> 短句”训练数据的 baseline
-- 后续替换为 Transformer/Seq2Seq 模型前的最小可用版本
+- 生成多个压缩候选
+- 按压缩率、关键词保留率和目标比例打分
+- 保护否定词、数字、英文 token 和指定关键词
+- 支持 `safe`、`balanced`、`aggressive` 三种压缩模式
+- 支持从 `原句 -> 压缩句` CSV 中学习删词和替换规则
+- 支持批量压缩和平均压缩效果评估
 
-## 使用
+## 快速使用
 
 ```powershell
 cd D:\Gititem\token-compressor
-python -m token_compressor.cli "我认为这个功能其实能够帮助用户非常快速地完成文本压缩"
-```
-
-如果 `python` 没有加入 PATH，可以使用本机已有解释器：
-
-```powershell
 D:\uvenv\Scripts\python.exe -m token_compressor.cli "我认为这个功能其实能够帮助用户非常快速地完成文本压缩"
 ```
 
 输出示例：
 
 ```text
-功能能助用户快速做完文本压缩
-tokens: 28 -> 15, ratio=0.536
-removed: 我认为 / 其实 / 非常
+功能助用户快速做完压缩文本
+tokens: 22 -> 9, ratio=0.409, mode=balanced, anchor_recall=1.0
 ```
 
-指定压缩强度：
+如果 `python` 已加入 PATH，也可以使用：
+
+```powershell
+python -m token_compressor.cli "我认为这个功能其实能够帮助用户非常快速地完成文本压缩"
+```
+
+## 压缩模式
+
+```powershell
+python -m token_compressor.cli "我认为这个工具其实能够帮助开发者非常快速地减少 token 使用量并且提高提示词表达效率" --mode safe
+python -m token_compressor.cli "我认为这个工具其实能够帮助开发者非常快速地减少 token 使用量并且提高提示词表达效率" --mode balanced
+python -m token_compressor.cli "我认为这个工具其实能够帮助开发者非常快速地减少 token 使用量并且提高提示词表达效率" --mode aggressive
+```
+
+模式说明：
+
+- `safe`：更保守，优先保留语义，适合高风险文本
+- `balanced`：默认模式，兼顾压缩率和可读性
+- `aggressive`：更短，但可能牺牲一些细节
+
+也可以手动指定目标比例：
 
 ```powershell
 python -m token_compressor.cli "由于现在输入内容比较长所以我们需要进行压缩处理" --ratio 0.55
 ```
 
-## 从样本学习删词规则
+## 关键词保护
+
+```powershell
+python -m token_compressor.cli "这个模型不能删除 30% 这个数字，也必须保留 API 关键词" --mode aggressive --keyword API --details
+```
+
+压缩器会尽量保留：
+
+- 否定词：`不`、`不能`、`没有`、`无法`、`未`
+- 数字和百分比：`30%`
+- 英文 token：`API`、`token`
+- 通过 `--keyword` 指定的关键词
+
+## JSON 输出
+
+```powershell
+python -m token_compressor.cli "如果用户想要减少 token 使用量那么可以使用这个压缩模型" --json
+```
+
+## 批量压缩
+
+准备一个 UTF-8 文本文件，每行一句：
+
+```powershell
+python -m token_compressor.cli --input-file examples\sentences.txt --mode balanced --json
+```
+
+## 评估平均压缩效果
+
+```powershell
+python -m token_compressor.cli --evaluate examples\sentences.txt --mode balanced
+```
+
+输出包含：
+
+- `avg_ratio`：平均压缩后 token 比例
+- `avg_anchor_recall`：关键词平均保留率
+- `warning_rate`：出现语义风险警告的比例
+
+## 从样本学习规则
 
 准备 CSV，包含两列：`original` 和 `compressed`。
 
@@ -45,30 +99,36 @@ python -m token_compressor.cli --learn examples\train_pairs.csv --save-profile p
 python -m token_compressor.cli "如果用户想要减少 token 使用量那么可以使用这个压缩模型" --profile examples\profile.json
 ```
 
-## 测试
-
-```powershell
-python -m unittest discover -s tests -v
-```
-
 ## Python 调用
 
 ```python
 from token_compressor import TokenCompressor
 
 compressor = TokenCompressor()
-result = compressor.compress("我认为这个功能其实能够帮助用户非常快速地完成文本压缩")
+result = compressor.compress(
+    "我认为这个功能其实能够帮助用户非常快速地完成文本压缩",
+    mode="balanced",
+)
 print(result.compressed)
+print(result.compression_ratio, result.anchor_recall)
 ```
 
-## 设计说明
+批量评估：
 
-当前实现包括：
+```python
+metrics = compressor.evaluate([
+    "我认为这个功能其实能够帮助用户非常快速地完成文本压缩",
+    "如果用户想要减少 token 使用量那么可以使用这个压缩模型",
+])
+print(metrics)
+```
 
-- 中文粗 token 计数
-- 删除低信息短语，例如“我认为”“其实”“非常”
-- 等价短语替换，例如“因为 -> 因”“如果 -> 若”
-- 删除部分语气词和重复表达
-- 从成对样本中学习常被删除的词
+## 测试
 
-如果你后续需要真正的神经网络版本，可以把这里的 `examples/train_pairs.csv` 扩展为大规模训练集，再用 T5/BART/mT5 训练“长句到短句”的生成模型。
+```powershell
+python -m unittest discover -s tests -v
+```
+
+## 边界
+
+这个项目仍然是轻量规则和打分模型，不等同于真正的神经网络语义压缩模型。它适合 prompt 预处理、去口水词、构造训练 baseline。如果要进一步做到更稳定的抽象改写，需要用大量 `长句 -> 短句` 样本训练 T5/BART/mT5 类 seq2seq 模型，或接入 LLM 做重写。

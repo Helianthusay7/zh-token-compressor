@@ -1,3 +1,3 @@
-from .compressor import CompressionResult, TokenCompressor
+from .compressor import CompressionMode, CompressionResult, TokenCompressor
 
-__all__ = ["CompressionResult", "TokenCompressor"]
+__all__ = ["CompressionMode", "CompressionResult", "TokenCompressor"]
