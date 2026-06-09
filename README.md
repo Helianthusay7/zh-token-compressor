@@ -11,6 +11,8 @@
 - 支持 `safe`、`balanced`、`aggressive` 三种压缩模式
 - 支持段落级压缩：按句压缩、删除重复句、汇总风险警告
 - 支持结构模板：`如果 A 那么 B -> 若 A 则 B`、`由于 A 所以 B -> 因 A 故 B`
+- 支持 JSON 配置文件扩展领域词、保护词、替换规则和模板规则
+- 支持 token 级 diff，查看哪些内容被删除或替换
 - 支持从 `原句 -> 压缩句` CSV 中学习删词和替换规则
 - 支持批量压缩、平均评估和 benchmark 回归测试
 
@@ -127,6 +129,48 @@ python -m token_compressor.cli "我认为这个功能其实能够帮助用户非
 
 ```powershell
 python -m token_compressor.cli "由于现在输入内容比较长所以我们需要进行压缩处理" --details --token-counter coarse
+```
+
+## 自定义配置
+
+`examples\config.json` 可以扩展压缩器，不需要改源码：
+
+```json
+{
+  "drop_phrases": ["坦白说"],
+  "replacements": {
+    "立刻马上": "立即"
+  },
+  "keep_words": ["SLA"],
+  "domain_terms": ["延迟", "吞吐", "成本"],
+  "template_rules": [
+    {
+      "pattern": "为了(.{1,40}?)需要(.{1,60})",
+      "replacement": "为\\1需\\2",
+      "label": "为了A需要B->为A需B"
+    }
+  ]
+}
+```
+
+使用配置：
+
+```powershell
+python -m token_compressor.cli "坦白说为了降低成本开销需要立刻马上优化延迟" --config examples\config.json --details --token-counter coarse
+```
+
+## Diff 输出
+
+查看压缩时删除和替换了什么：
+
+```powershell
+python -m token_compressor.cli "我认为这个功能其实能够帮助用户非常快速地完成文本压缩" --diff --token-counter coarse
+```
+
+JSON 模式会输出结构化 diff：
+
+```powershell
+python -m token_compressor.cli "我认为这个功能其实能够帮助用户非常快速地完成文本压缩" --json --token-counter coarse
 ```
 
 ## 评估平均压缩效果

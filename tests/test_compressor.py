@@ -100,6 +100,23 @@ class TokenCompressorTest(unittest.TestCase):
         self.assertEqual(result.token_counter, "coarse")
         self.assertLess(result.compression_ratio, 1.0)
 
+    def test_config_adds_custom_rules(self) -> None:
+        compressor = TokenCompressor.from_config("examples/config.json", token_counter="coarse")
+        result = compressor.compress("坦白说为了降低成本开销需要立刻马上优化延迟")
+
+        self.assertNotIn("坦白说", result.compressed)
+        self.assertIn("成本", result.compressed)
+        self.assertIn("立即", result.compressed)
+        self.assertIn("延迟", result.compressed)
+        self.assertTrue(any("为了A需要B" in item for item in result.removed))
+
+    def test_diff_reports_changes(self) -> None:
+        compressor = TokenCompressor(token_counter="coarse")
+        result = compressor.compress("我认为这个功能其实能够帮助用户非常快速地完成文本压缩")
+
+        self.assertTrue(result.diff)
+        self.assertTrue(any(item.op in {"delete", "replace"} for item in result.diff))
+
     def test_accepts_custom_token_counter(self) -> None:
         compressor = TokenCompressor(token_counter=FixedTokenCounter())
         result = compressor.compress("我认为这个功能其实能够帮助用户非常快速地完成文本压缩")

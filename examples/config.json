@@ -1,0 +1,26 @@
+{
+  "drop_phrases": [
+    "坦白说",
+    "老实说"
+  ],
+  "replacements": {
+    "立刻马上": "立即",
+    "成本开销": "成本"
+  },
+  "keep_words": [
+    "SLA",
+    "P0"
+  ],
+  "domain_terms": [
+    "延迟",
+    "吞吐",
+    "成本"
+  ],
+  "template_rules": [
+    {
+      "pattern": "为了(.{1,40}?)需要(.{1,60})",
+      "replacement": "为\\1需\\2",
+      "label": "为了A需要B->为A需B"
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import difflib
 import json
 import math
 import re
@@ -45,6 +46,20 @@ class CompressionMode:
 
 
 @dataclass(frozen=True)
+class TemplateRule:
+    pattern: str
+    replacement: str
+    label: str
+
+
+@dataclass(frozen=True)
+class DiffOperation:
+    op: str
+    source: str
+    target: str = ""
+
+
+@dataclass(frozen=True)
 class CompressionResult:
     original: str
     compressed: str
@@ -58,6 +73,7 @@ class CompressionResult:
     warnings: tuple[str, ...] = ()
     candidates_considered: int = 0
     token_counter: str = "coarse"
+    diff: tuple[DiffOperation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -71,6 +87,7 @@ class ParagraphCompressionResult:
     removed_sentences: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     token_counter: str = "coarse"
+    diff: tuple[DiffOperation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -93,6 +110,12 @@ class TokenCompressor:
         "balanced": CompressionMode("balanced", target_ratio=0.62, min_anchor_recall=0.82, drop_optional_clauses=True),
         "aggressive": CompressionMode("aggressive", target_ratio=0.48, min_anchor_recall=0.70, drop_optional_clauses=True),
     }
+
+    DEFAULT_TEMPLATE_RULES = (
+        TemplateRule(r"如果(.{1,40}?)那么(.{1,60})", r"若\1则\2", "如果A那么B->若A则B"),
+        TemplateRule(r"由于(.{1,40}?)所以(.{1,60})", r"因\1故\2", "由于A所以B->因A故B"),
+        TemplateRule(r"因为(.{1,40}?)所以(.{1,60})", r"因\1故\2", "因为A所以B->因A故B"),
+    )
 
     DEFAULT_DROP_PHRASES = (
         "我认为",
@@ -229,6 +252,7 @@ class TokenCompressor:
         replacements: dict[str, str] | None = None,
         keep_words: Iterable[str] | None = None,
         domain_terms: Iterable[str] | None = None,
+        template_rules: Iterable[TemplateRule | dict[str, str]] | None = None,
         token_counter: str | TokenCounter = "auto",
         tiktoken_encoding: str = "cl100k_base",
     ) -> None:
@@ -238,6 +262,9 @@ class TokenCompressor:
             self.replacements.update(replacements)
         self.keep_words = tuple(keep_words or self.DEFAULT_KEEP_WORDS)
         self.domain_terms = tuple(domain_terms or self.DEFAULT_DOMAIN_TERMS)
+        self.template_rules = self.DEFAULT_TEMPLATE_RULES + tuple(
+            self._coerce_template_rule(rule) for rule in (template_rules or ())
+        )
         self.lexicon = tuple(sorted(set(self.domain_terms + self.keep_words), key=len, reverse=True))
         self.token_counter = self._build_token_counter(token_counter, tiktoken_encoding)
 
@@ -254,6 +281,25 @@ class TokenCompressor:
             replacements=data.get("replacements"),
             keep_words=data.get("keep_words"),
             domain_terms=data.get("domain_terms"),
+            template_rules=data.get("template_rules"),
+            token_counter=token_counter,
+            tiktoken_encoding=tiktoken_encoding,
+        )
+
+    @classmethod
+    def from_config(
+        cls,
+        path: str | Path,
+        token_counter: str | TokenCounter = "auto",
+        tiktoken_encoding: str = "cl100k_base",
+    ) -> "TokenCompressor":
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls(
+            drop_phrases=cls.DEFAULT_DROP_PHRASES + tuple(data.get("drop_phrases", ())),
+            replacements=data.get("replacements"),
+            keep_words=cls.DEFAULT_KEEP_WORDS + tuple(data.get("keep_words", ())),
+            domain_terms=cls.DEFAULT_DOMAIN_TERMS + tuple(data.get("domain_terms", ())),
+            template_rules=data.get("template_rules"),
             token_counter=token_counter,
             tiktoken_encoding=tiktoken_encoding,
         )
@@ -294,6 +340,7 @@ class TokenCompressor:
             warnings=warnings,
             candidates_considered=len(candidates),
             token_counter=self.token_counter.name,
+            diff=self._build_rule_diff(best.removed) or self._build_diff(original, compressed),
         )
 
     def batch_compress(
@@ -335,6 +382,8 @@ class TokenCompressor:
         compressed_tokens = self.count_tokens(compressed)
         ratio = compressed_tokens / original_tokens if original_tokens else 1.0
         warnings = tuple(dict.fromkeys(warning for result in sentence_results for warning in result.warnings))
+        diff = tuple(DiffOperation("delete_sentence", sentence) for sentence in removed_sentences)
+        diff += tuple(operation for result in sentence_results for operation in result.diff)
 
         return ParagraphCompressionResult(
             original=original,
@@ -346,6 +395,7 @@ class TokenCompressor:
             removed_sentences=tuple(removed_sentences),
             warnings=warnings,
             token_counter=self.token_counter.name,
+            diff=diff or self._build_diff(original, compressed),
         )
 
     def evaluate(
@@ -426,6 +476,15 @@ class TokenCompressor:
                 return CoarseTokenCounter(self._segment)
         raise ValueError("token_counter must be auto, coarse, tiktoken, or a TokenCounter object")
 
+    def _coerce_template_rule(self, rule: TemplateRule | dict[str, str]) -> TemplateRule:
+        if isinstance(rule, TemplateRule):
+            return rule
+        return TemplateRule(
+            pattern=rule["pattern"],
+            replacement=rule["replacement"],
+            label=rule.get("label") or f"{rule['pattern']}->{rule['replacement']}",
+        )
+
     def _mode_config(self, mode: str, target_ratio: float | None) -> CompressionMode:
         if mode not in self.MODES:
             raise ValueError(f"unknown mode: {mode}. expected one of: {', '.join(self.MODES)}")
@@ -489,17 +548,12 @@ class TokenCompressor:
     def _apply_templates(self, text: str) -> tuple[str, list[str]]:
         candidate = text
         removed: list[str] = []
-        rules = (
-            (r"如果(.{1,40}?)那么(.{1,60})", r"若\1则\2", "如果A那么B->若A则B"),
-            (r"由于(.{1,40}?)所以(.{1,60})", r"因\1故\2", "由于A所以B->因A故B"),
-            (r"因为(.{1,40}?)所以(.{1,60})", r"因\1故\2", "因为A所以B->因A故B"),
-        )
 
-        for pattern, replacement, label in rules:
-            updated = re.sub(pattern, replacement, candidate)
+        for rule in self.template_rules:
+            updated = re.sub(rule.pattern, rule.replacement, candidate)
             if updated != candidate:
                 candidate = updated
-                removed.append(label)
+                removed.append(rule.label)
 
         updated = re.sub(r"用户想要([^则那么。！？；;]{1,32}?)可以使用([^。！？；;]{1,32})", r"用户可用\2做\1", candidate)
         if updated != candidate:
@@ -641,6 +695,30 @@ class TokenCompressor:
             return True
         replacement = self.replacements.get(anchor)
         return bool(replacement and replacement in text)
+
+    def _build_diff(self, original: str, compressed: str) -> tuple[DiffOperation, ...]:
+        source_tokens = self._segment(original)
+        target_tokens = self._segment(compressed)
+        matcher = difflib.SequenceMatcher(a=source_tokens, b=target_tokens, autojunk=False)
+        operations: list[DiffOperation] = []
+
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                continue
+            source = "".join(source_tokens[i1:i2])
+            target = "".join(target_tokens[j1:j2])
+            operations.append(DiffOperation(op=tag, source=source, target=target))
+        return tuple(operations)
+
+    def _build_rule_diff(self, removed: tuple[str, ...]) -> tuple[DiffOperation, ...]:
+        operations: list[DiffOperation] = []
+        for item in removed:
+            if "->" in item:
+                source, target = item.split("->", 1)
+                operations.append(DiffOperation("replace" if target else "delete", source, target))
+            elif item:
+                operations.append(DiffOperation("delete", item))
+        return tuple(operations)
 
     def _warnings(
         self,

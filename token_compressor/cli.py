@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-r", "--ratio", type=float, help="override target compression ratio")
     parser.add_argument("-p", "--profile", help="JSON rule profile")
+    parser.add_argument("-c", "--config", help="JSON config with custom drop phrases, replacements, and templates")
     parser.add_argument("-k", "--keyword", action="append", default=[], help="keyword that must be preserved")
     parser.add_argument(
         "--token-counter",
@@ -33,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--paragraph", action="store_true", help="treat input text or input file as one paragraph")
     parser.add_argument("--json", action="store_true", help="print JSON lines")
     parser.add_argument("--details", action="store_true", help="print compression diagnostics")
+    parser.add_argument("--diff", action="store_true", help="print token-level delete/replace operations")
     parser.add_argument("--learn", help="CSV file with columns: original, compressed")
     parser.add_argument("--save-profile", help="path to save learned profile")
     parser.add_argument("--evaluate", help="UTF-8 text file used to print average compression metrics")
@@ -44,15 +46,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
 
-    compressor = (
-        TokenCompressor.from_profile(
+    if args.profile and args.config:
+        raise SystemExit("--profile and --config cannot be used together")
+
+    if args.config:
+        compressor = TokenCompressor.from_config(
+            args.config,
+            token_counter=args.token_counter,
+            tiktoken_encoding=args.tiktoken_encoding,
+        )
+    elif args.profile:
+        compressor = TokenCompressor.from_profile(
             args.profile,
             token_counter=args.token_counter,
             tiktoken_encoding=args.tiktoken_encoding,
         )
-        if args.profile
-        else TokenCompressor(token_counter=args.token_counter, tiktoken_encoding=args.tiktoken_encoding)
-    )
+    else:
+        compressor = TokenCompressor(token_counter=args.token_counter, tiktoken_encoding=args.tiktoken_encoding)
 
     if args.learn:
         if not args.save_profile:
@@ -79,11 +89,11 @@ def main() -> None:
         if args.paragraph:
             text = Path(args.input_file).read_text(encoding="utf-8-sig")
             result = compressor.compress_paragraph(text, target_ratio=args.ratio, mode=args.mode, keywords=args.keyword)
-            _print_paragraph_result(result, as_json=args.json, details=args.details)
+            _print_paragraph_result(result, as_json=args.json, details=args.details, show_diff=args.diff)
             return
         for text in _read_lines(args.input_file):
             result = compressor.compress(text, target_ratio=args.ratio, mode=args.mode, keywords=args.keyword)
-            _print_result(result, as_json=args.json, details=args.details)
+            _print_result(result, as_json=args.json, details=args.details, show_diff=args.diff)
         return
 
     if not args.text:
@@ -91,10 +101,10 @@ def main() -> None:
 
     if args.paragraph:
         result = compressor.compress_paragraph(args.text, target_ratio=args.ratio, mode=args.mode, keywords=args.keyword)
-        _print_paragraph_result(result, as_json=args.json, details=args.details)
+        _print_paragraph_result(result, as_json=args.json, details=args.details, show_diff=args.diff)
     else:
         result = compressor.compress(args.text, target_ratio=args.ratio, mode=args.mode, keywords=args.keyword)
-        _print_result(result, as_json=args.json, details=True if args.details else False)
+        _print_result(result, as_json=args.json, details=True if args.details else False, show_diff=args.diff)
 
 
 def _read_pairs(path: str) -> list[tuple[str, str]]:
@@ -116,7 +126,7 @@ def _read_lines(path: str) -> list[str]:
     ]
 
 
-def _print_result(result, as_json: bool, details: bool) -> None:
+def _print_result(result, as_json: bool, details: bool, show_diff: bool) -> None:
     if as_json:
         print(
             json.dumps(
@@ -133,6 +143,7 @@ def _print_result(result, as_json: bool, details: bool) -> None:
                     "removed": result.removed,
                     "candidates_considered": result.candidates_considered,
                     "token_counter": result.token_counter,
+                    "diff": _diff_to_dict(result.diff),
                 },
                 ensure_ascii=False,
             )
@@ -153,9 +164,11 @@ def _print_result(result, as_json: bool, details: bool) -> None:
             print("removed:", " / ".join(result.removed))
         if result.warnings:
             print("warnings:", " / ".join(result.warnings))
+    if show_diff:
+        _print_diff(result.diff)
 
 
-def _print_paragraph_result(result, as_json: bool, details: bool) -> None:
+def _print_paragraph_result(result, as_json: bool, details: bool, show_diff: bool) -> None:
     if as_json:
         print(
             json.dumps(
@@ -168,6 +181,7 @@ def _print_paragraph_result(result, as_json: bool, details: bool) -> None:
                     "removed_sentences": result.removed_sentences,
                     "warnings": result.warnings,
                     "token_counter": result.token_counter,
+                    "diff": _diff_to_dict(result.diff),
                     "sentences": [
                         {
                             "original": item.original,
@@ -175,6 +189,7 @@ def _print_paragraph_result(result, as_json: bool, details: bool) -> None:
                             "ratio": item.compression_ratio,
                             "anchor_recall": item.anchor_recall,
                             "warnings": item.warnings,
+                            "diff": _diff_to_dict(item.diff),
                         }
                         for item in result.sentence_results
                     ],
@@ -198,6 +213,26 @@ def _print_paragraph_result(result, as_json: bool, details: bool) -> None:
             print("removed sentences:", " / ".join(result.removed_sentences))
         if result.warnings:
             print("warnings:", " / ".join(result.warnings))
+    if show_diff:
+        _print_diff(result.diff)
+
+
+def _diff_to_dict(diff) -> list[dict[str, str]]:
+    return [{"op": item.op, "source": item.source, "target": item.target} for item in diff]
+
+
+def _print_diff(diff) -> None:
+    if not diff:
+        print("diff: no changes")
+        return
+    print("diff:")
+    for item in diff:
+        if item.op in ("delete", "delete_sentence"):
+            print(f"  - {item.source}")
+        elif item.op == "insert":
+            print(f"  + {item.target}")
+        else:
+            print(f"  ~ {item.source} -> {item.target}")
 
 
 if __name__ == "__main__":

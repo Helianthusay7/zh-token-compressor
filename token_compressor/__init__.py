@@ -1,3 +1,17 @@
-from .compressor import CompressionMode, CompressionResult, ParagraphCompressionResult, TokenCompressor
+from .compressor import (
+    CompressionMode,
+    CompressionResult,
+    DiffOperation,
+    ParagraphCompressionResult,
+    TemplateRule,
+    TokenCompressor,
+)
 
-__all__ = ["CompressionMode", "CompressionResult", "ParagraphCompressionResult", "TokenCompressor"]
+__all__ = [
+    "CompressionMode",
+    "CompressionResult",
+    "DiffOperation",
+    "ParagraphCompressionResult",
+    "TemplateRule",
+    "TokenCompressor",
+]
