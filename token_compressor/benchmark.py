@@ -30,6 +30,7 @@ class BenchmarkReport:
     failed: int
     avg_ratio: float
     avg_anchor_recall: float
+    avg_semantic_similarity: float
     warning_rate: float
     token_counter: str
     failures: tuple[BenchmarkFailure, ...]
@@ -41,6 +42,7 @@ class BenchmarkReport:
             "failed": self.failed,
             "avg_ratio": self.avg_ratio,
             "avg_anchor_recall": self.avg_anchor_recall,
+            "avg_semantic_similarity": self.avg_semantic_similarity,
             "warning_rate": self.warning_rate,
             "token_counter": self.token_counter,
         }
@@ -102,7 +104,7 @@ def run_benchmark(compressor: TokenCompressor, cases: list[BenchmarkCase]) -> Be
             failures.append(BenchmarkFailure(case, result, tuple(reasons)))
 
     if not results:
-        return BenchmarkReport(0, 0, 0, 0.0, 0.0, 0.0, compressor.token_counter.name, ())
+        return BenchmarkReport(0, 0, 0, 0.0, 0.0, 0.0, 0.0, compressor.token_counter.name, ())
 
     return BenchmarkReport(
         count=len(results),
@@ -110,6 +112,7 @@ def run_benchmark(compressor: TokenCompressor, cases: list[BenchmarkCase]) -> Be
         failed=len(failures),
         avg_ratio=round(sum(item.compression_ratio for item in results) / len(results), 3),
         avg_anchor_recall=round(sum(item.anchor_recall for item in results) / len(results), 3),
+        avg_semantic_similarity=round(sum(item.semantic_similarity for item in results) / len(results), 3),
         warning_rate=round(sum(1 for item in results if item.warnings) / len(results), 3),
         token_counter=compressor.token_counter.name,
         failures=tuple(failures),

@@ -6,6 +6,7 @@ import json
 import math
 import re
 from pathlib import Path
+from collections import Counter
 from typing import Iterable, Protocol
 
 
@@ -43,6 +44,7 @@ class CompressionMode:
     target_ratio: float
     min_anchor_recall: float
     drop_optional_clauses: bool
+    min_semantic_similarity: float = 0.45
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,7 @@ class CompressionResult:
     removed: tuple[str, ...]
     mode: str = "balanced"
     anchor_recall: float = 1.0
+    semantic_similarity: float = 1.0
     preserved_terms: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     candidates_considered: int = 0
@@ -83,6 +86,7 @@ class ParagraphCompressionResult:
     original_tokens: int
     compressed_tokens: int
     compression_ratio: float
+    semantic_similarity: float
     sentence_results: tuple[CompressionResult, ...]
     removed_sentences: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
@@ -106,9 +110,9 @@ class TokenCompressor:
     """
 
     MODES = {
-        "safe": CompressionMode("safe", target_ratio=0.75, min_anchor_recall=0.92, drop_optional_clauses=False),
-        "balanced": CompressionMode("balanced", target_ratio=0.62, min_anchor_recall=0.82, drop_optional_clauses=True),
-        "aggressive": CompressionMode("aggressive", target_ratio=0.48, min_anchor_recall=0.70, drop_optional_clauses=True),
+        "safe": CompressionMode("safe", target_ratio=0.75, min_anchor_recall=0.92, drop_optional_clauses=False, min_semantic_similarity=0.60),
+        "balanced": CompressionMode("balanced", target_ratio=0.62, min_anchor_recall=0.82, drop_optional_clauses=True, min_semantic_similarity=0.45),
+        "aggressive": CompressionMode("aggressive", target_ratio=0.48, min_anchor_recall=0.70, drop_optional_clauses=True, min_semantic_similarity=0.35),
     }
 
     DEFAULT_TEMPLATE_RULES = (
@@ -347,13 +351,24 @@ class TokenCompressor:
         config = self._mode_config(mode, target_ratio)
         original = self._normalize(text)
         if not original:
-            return CompressionResult("", "", 0, 0, 1.0, (), mode=config.name, token_counter=self.token_counter.name)
+            return CompressionResult(
+                "",
+                "",
+                0,
+                0,
+                1.0,
+                (),
+                mode=config.name,
+                token_counter=self.token_counter.name,
+                semantic_similarity=1.0,
+            )
 
         anchors = self._extract_anchors(original, keywords)
         candidates = self._generate_candidates(original, config, anchors)
         best = self._select_candidate(original, candidates, config, anchors)
         compressed = self._cleanup(best.text) or original
         recall = self._anchor_recall(compressed, anchors)
+        semantic = self._semantic_similarity(original, compressed)
         warnings = self._warnings(original, compressed, anchors, recall, config)
 
         original_tokens = self.count_tokens(original)
@@ -369,6 +384,7 @@ class TokenCompressor:
             removed=best.removed,
             mode=config.name,
             anchor_recall=round(recall, 3),
+            semantic_similarity=round(semantic, 3),
             preserved_terms=tuple(term for term in anchors if self._anchor_preserved(term, compressed)),
             warnings=warnings,
             candidates_considered=len(candidates),
@@ -393,7 +409,7 @@ class TokenCompressor:
     ) -> ParagraphCompressionResult:
         original = text.strip()
         if not original:
-            return ParagraphCompressionResult("", "", 0, 0, 1.0, (), token_counter=self.token_counter.name)
+            return ParagraphCompressionResult("", "", 0, 0, 1.0, 1.0, (), token_counter=self.token_counter.name)
 
         sentence_results: list[CompressionResult] = []
         removed_sentences: list[str] = []
@@ -414,6 +430,7 @@ class TokenCompressor:
         original_tokens = self.count_tokens(original)
         compressed_tokens = self.count_tokens(compressed)
         ratio = compressed_tokens / original_tokens if original_tokens else 1.0
+        semantic = sum(result.semantic_similarity for result in sentence_results) / len(sentence_results) if sentence_results else 1.0
         warnings = tuple(dict.fromkeys(warning for result in sentence_results for warning in result.warnings))
         diff = tuple(DiffOperation("delete_sentence", sentence) for sentence in removed_sentences)
         diff += tuple(operation for result in sentence_results for operation in result.diff)
@@ -424,6 +441,7 @@ class TokenCompressor:
             original_tokens=original_tokens,
             compressed_tokens=compressed_tokens,
             compression_ratio=round(ratio, 3),
+            semantic_similarity=round(semantic, 3),
             sentence_results=tuple(sentence_results),
             removed_sentences=tuple(removed_sentences),
             warnings=warnings,
@@ -439,12 +457,19 @@ class TokenCompressor:
     ) -> dict[str, float]:
         results = self.batch_compress(texts, target_ratio=target_ratio, mode=mode)
         if not results:
-            return {"count": 0, "avg_ratio": 0.0, "avg_anchor_recall": 0.0, "warning_rate": 0.0}
+            return {
+                "count": 0,
+                "avg_ratio": 0.0,
+                "avg_anchor_recall": 0.0,
+                "avg_semantic_similarity": 0.0,
+                "warning_rate": 0.0,
+            }
 
         return {
             "count": float(len(results)),
             "avg_ratio": round(sum(item.compression_ratio for item in results) / len(results), 3),
             "avg_anchor_recall": round(sum(item.anchor_recall for item in results) / len(results), 3),
+            "avg_semantic_similarity": round(sum(item.semantic_similarity for item in results) / len(results), 3),
             "warning_rate": round(sum(1 for item in results if item.warnings) / len(results), 3),
         }
 
@@ -526,7 +551,13 @@ class TokenCompressor:
             return base
         if not 0.2 <= target_ratio <= 1.0:
             raise ValueError("target_ratio must be between 0.2 and 1.0")
-        return CompressionMode(base.name, target_ratio, base.min_anchor_recall, base.drop_optional_clauses)
+        return CompressionMode(
+            base.name,
+            target_ratio,
+            base.min_anchor_recall,
+            base.drop_optional_clauses,
+            base.min_semantic_similarity,
+        )
 
     def _generate_candidates(
         self,
@@ -603,27 +634,51 @@ class TokenCompressor:
     ) -> _Candidate:
         original_len = max(1, self.count_tokens(original))
         scored: list[tuple[float, _Candidate]] = []
+        eligible: list[tuple[float, _Candidate]] = []
 
         for candidate in candidates:
             text = self._cleanup(candidate.text)
             if not text:
                 continue
             recall = self._anchor_recall(text, anchors)
+            semantic = self._semantic_similarity(original, text)
             ratio = self.count_tokens(text) / original_len
-            target_distance = abs(ratio - config.target_ratio)
+            alignment = 1.0 - min(1.0, abs(ratio - config.target_ratio) / max(config.target_ratio, 0.2))
             too_short_penalty = 0.20 if ratio < config.target_ratio * 0.72 else 0.0
             recall_penalty = max(0.0, config.min_anchor_recall - recall) * 2.4
-            template_bonus = 0.08 if "template" in candidate.stage else 0.0
+            semantic_penalty = max(0.0, 0.50 - semantic) * 1.6
+            template_bonus = 0.16 if "template" in candidate.stage else 0.0
+            drop_bonus = min(
+                0.12,
+                0.08 * sum(1 for item in candidate.removed if item in self.drop_phrases),
+            )
+            remaining_drop_penalty = min(
+                0.24,
+                0.18 * sum(1 for phrase in self.drop_phrases if phrase in text and phrase not in self.keep_words),
+            )
             score = (
-                (1.0 - ratio)
-                + recall * 0.85
+                semantic * 0.40
+                + alignment * 0.45
+                + recall * 0.10
                 + template_bonus
-                - target_distance * 0.25
+                + drop_bonus
                 - too_short_penalty
                 - recall_penalty
+                - semantic_penalty
+                - remaining_drop_penalty
             )
-            if recall >= config.min_anchor_recall or ratio >= 0.85:
-                scored.append((score, _Candidate(text, candidate.removed, candidate.stage)))
+            item = (score, _Candidate(text, candidate.removed, candidate.stage))
+            scored.append(item)
+            if (
+                text != original
+                and ratio < 0.995
+                and recall >= config.min_anchor_recall
+                and semantic >= config.min_semantic_similarity
+            ):
+                eligible.append(item)
+
+        if eligible:
+            scored = eligible
 
         if not scored:
             return _Candidate(original, (), "fallback")
@@ -786,6 +841,66 @@ class TokenCompressor:
             if anchor in self.keep_words and not self._anchor_preserved(anchor, compressed):
                 warnings.append(f"lost_keep_word:{anchor}")
         return tuple(dict.fromkeys(warnings))
+
+    def _semantic_similarity(self, original: str, compressed: str) -> float:
+        original_normalized = self._semantic_canonicalize(original)
+        compressed_normalized = self._semantic_canonicalize(compressed)
+        original_features = self._semantic_features(original_normalized)
+        compressed_features = self._semantic_features(compressed_normalized)
+        if not original_features or not compressed_features:
+            return 0.0
+
+        feature_keys = set(original_features) | set(compressed_features)
+        dot = sum(original_features[key] * compressed_features[key] for key in feature_keys)
+        original_norm = math.sqrt(sum(value * value for value in original_features.values()))
+        compressed_norm = math.sqrt(sum(value * value for value in compressed_features.values()))
+        if not original_norm or not compressed_norm:
+            return 0.0
+
+        cosine = dot / (original_norm * compressed_norm)
+        lexical = difflib.SequenceMatcher(None, original_normalized, compressed_normalized).ratio()
+        anchor_bonus = 0.0
+        if original_normalized and compressed_normalized:
+            original_chars = set(original_normalized)
+            compressed_chars = set(compressed_normalized)
+            anchor_bonus = len(original_chars & compressed_chars) / max(1, len(original_chars | compressed_chars))
+        score = cosine * 0.56 + lexical * 0.28 + anchor_bonus * 0.16
+        return max(0.0, min(1.0, score))
+
+    def _semantic_canonicalize(self, text: str) -> str:
+        candidate = self._normalize(text)
+        for phrase in sorted(self.drop_phrases, key=len, reverse=True):
+            if phrase and phrase not in self.keep_words:
+                candidate = candidate.replace(phrase, "")
+        for source, target in sorted(self.replacements.items(), key=lambda item: len(item[0]), reverse=True):
+            if source in self.keep_words:
+                continue
+            candidate = candidate.replace(source, target)
+        return self._cleanup(candidate)
+
+    def _semantic_features(self, text: str) -> Counter[str]:
+        normalized = self._normalize(text)
+        tokens = self._segment(normalized)
+        features: Counter[str] = Counter()
+
+        for gram in self._character_ngrams(normalized, 2):
+            features[f"c2:{gram}"] += 1
+        for gram in self._character_ngrams(normalized, 3):
+            features[f"c3:{gram}"] += 1
+        for gram in self._token_ngrams(tokens, 2):
+            features[f"t2:{gram}"] += 1
+
+        return features
+
+    def _character_ngrams(self, text: str, size: int) -> list[str]:
+        if size <= 0 or len(text) < size:
+            return []
+        return [text[index : index + size] for index in range(len(text) - size + 1)]
+
+    def _token_ngrams(self, tokens: list[str], size: int) -> list[str]:
+        if size <= 0 or len(tokens) < size:
+            return []
+        return ["|".join(tokens[index : index + size]) for index in range(len(tokens) - size + 1)]
 
     def _unique_candidates(self, candidates: list[_Candidate]) -> list[_Candidate]:
         seen: set[str] = set()

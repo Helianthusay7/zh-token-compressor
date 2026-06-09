@@ -93,6 +93,7 @@ class TokenCompressorTest(unittest.TestCase):
         self.assertEqual(metrics["count"], 2.0)
         self.assertLess(metrics["avg_ratio"], 1.0)
         self.assertGreater(metrics["avg_anchor_recall"], 0.0)
+        self.assertIn("avg_semantic_similarity", metrics)
 
     def test_can_force_coarse_token_counter(self) -> None:
         compressor = TokenCompressor(token_counter="coarse")
@@ -124,6 +125,7 @@ class TokenCompressorTest(unittest.TestCase):
         self.assertIn("基于既有框架开发业务模块", result.compressed)
         self.assertIn("减少人工重复", result.compressed)
         self.assertLess(result.compression_ratio, 0.7)
+        self.assertGreater(result.semantic_similarity, 0.6)
 
     def test_detects_business_domain(self) -> None:
         text = "为满足业务线上化落地需求，优化流程效率并提升可视化能力"
@@ -142,6 +144,7 @@ class TokenCompressorTest(unittest.TestCase):
         self.assertIn("DB连接", result.compressed)
         self.assertIn("延迟", result.compressed)
         self.assertIn("部署", result.compressed)
+        self.assertGreater(result.semantic_similarity, 0.6)
 
     def test_load_domain_config(self) -> None:
         config = load_domain_config("business")

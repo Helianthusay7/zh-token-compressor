@@ -228,6 +228,7 @@ def _print_result(result, as_json: bool, details: bool, show_diff: bool) -> None
                     "compressed_tokens": result.compressed_tokens,
                     "compression_ratio": result.compression_ratio,
                     "anchor_recall": result.anchor_recall,
+                    "semantic_similarity": result.semantic_similarity,
                     "preserved_terms": result.preserved_terms,
                     "warnings": result.warnings,
                     "removed": result.removed,
@@ -248,6 +249,7 @@ def _print_result(result, as_json: bool, details: bool, show_diff: bool) -> None
             f"ratio={result.compression_ratio}, "
             f"mode={result.mode}, "
             f"anchor_recall={result.anchor_recall}, "
+            f"semantic={result.semantic_similarity}, "
             f"counter={result.token_counter}"
         )
         if result.removed:
@@ -268,6 +270,7 @@ def _print_paragraph_result(result, as_json: bool, details: bool, show_diff: boo
                     "original_tokens": result.original_tokens,
                     "compressed_tokens": result.compressed_tokens,
                     "compression_ratio": result.compression_ratio,
+                    "semantic_similarity": result.semantic_similarity,
                     "removed_sentences": result.removed_sentences,
                     "warnings": result.warnings,
                     "token_counter": result.token_counter,
@@ -296,6 +299,7 @@ def _print_paragraph_result(result, as_json: bool, details: bool, show_diff: boo
             f"{result.original_tokens} -> {result.compressed_tokens}, "
             f"ratio={result.compression_ratio}, "
             f"sentences={len(result.sentence_results)}, "
+            f"semantic={result.semantic_similarity}, "
             f"removed_sentences={len(result.removed_sentences)}, "
             f"counter={result.token_counter}"
         )
